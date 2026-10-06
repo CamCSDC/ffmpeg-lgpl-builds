@@ -180,6 +180,9 @@ jobs:
           } > release/RELEASE-NOTES.md
           cat release/RELEASE-NOTES.md
 
+      # The build's own files by name: "release/*.tar.gz" would also match the
+      # zlib source tarball (source-zlib-*.tar.gz), which release/source-* already
+      # uploads, and GitHub refuses the same asset twice.
       - name: publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -187,10 +190,10 @@ jobs:
           tag="${{ steps.meta.outputs.tag }}"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "release $tag already exists — updating assets"
-            gh release upload "$tag" release/*.tar.gz release/*.sha256 release/source-* --clobber
+            gh release upload "$tag" release/ffmpeg-*.tar.gz release/ffmpeg-*.tar.gz.sha256 release/source-* --clobber
           else
             gh release create "$tag" \
               --title "$tag" \
               --notes-file release/RELEASE-NOTES.md \
-              release/*.tar.gz release/*.sha256 release/source-*
+              release/ffmpeg-*.tar.gz release/ffmpeg-*.tar.gz.sha256 release/source-*
           fi
