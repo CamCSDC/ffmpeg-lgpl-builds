@@ -286,10 +286,16 @@ for pcfile in zlib freetype2; do
         exit 1
     fi
 done
-case "$("$PKG_CONFIG" --variable=prefix freetype2)" in
-    "$DEPS_PREFIX") echo "  ✓ FFmpeg will link this FreeType, not MSYS2's" ;;
-    *) echo "✗ pkg-config resolves freetype2 outside $DEPS_PREFIX" >&2; exit 1 ;;
-esac
+# MSYS2's pkgconf answers with a Windows path (D:/a/...) where the script holds an
+# MSYS one (/d/a/...), so both are put in the same form before comparing.
+FT_PREFIX="$(cygpath -m "$("$PKG_CONFIG" --variable=prefix freetype2)")"
+WANT_PREFIX="$(cygpath -m "$DEPS_PREFIX")"
+if [ "${FT_PREFIX,,}" = "${WANT_PREFIX,,}" ]; then
+    echo "  ✓ FFmpeg will link this FreeType, not MSYS2's"
+else
+    echo "✗ pkg-config resolves freetype2 to $FT_PREFIX, not $WANT_PREFIX" >&2
+    exit 1
+fi
 
 # ---- fetch ------------------------------------------------------------------
 if [ ! -f "$TARBALL" ]; then
