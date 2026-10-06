@@ -1,3 +1,9 @@
+> **EvoIMS fork.** This fork builds **Windows x64 only**, on GitHub-hosted runners, and adds **zlib**,
+> **FreeType** and **HarfBuzz** (all permissively licensed, built from pinned upstream tarballs with their
+> optional dependencies off) so the binary has the `drawtext` filter and the PNG encoder that EvoIMS needs
+> for its case-story videos and waveform pictures. It stays LGPL-2.1-only. Each release attaches the exact
+> FFmpeg, zlib, FreeType and HarfBuzz source tarballs it was built from. Upstream: [serversideup/ffmpeg-lgpl-builds](https://github.com/serversideup/ffmpeg-lgpl-builds).
+
 # ffmpeg-lgpl-builds
 
 Reproducible, LGPL-only FFmpeg binaries for closed-source applications.
