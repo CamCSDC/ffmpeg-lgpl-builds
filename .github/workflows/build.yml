@@ -1,25 +1,26 @@
 name: build
 
-# Cuts a release whenever VERSION or the build script changes on main.
-# Also triggerable manually via workflow_dispatch for one-off rebuilds.
-# Build number = github.run_number (monotonic per workflow), so any push
-# or manual dispatch produces a fresh, distinct tag without needing a
-# tracked counter file in the repo.
+# EvoIMS fork of serversideup/ffmpeg-lgpl-builds: Windows x64 only, on
+# GitHub-hosted runners (upstream uses Depot runners a fork cannot reach), with
+# zlib + FreeType added for drawtext and PNG. Each release carries the exact
+# FFmpeg, zlib and FreeType source tarballs it was built from, so the LGPL
+# source offer is satisfied from the same place as the binary.
+#
+# Cuts a release whenever VERSION or the build script changes on main. Also
+# triggerable manually via workflow_dispatch. Pull requests build and verify
+# but publish nothing. Build number = github.run_number, so every push or
+# dispatch produces a fresh, distinct tag.
 on:
   push:
     branches: [main]
     paths:
       - VERSION
-      - scripts/build-macos.sh
       - scripts/build-windows.sh
-      - scripts/build-linux.sh
       - .github/workflows/build.yml
   pull_request:
     paths:
       - VERSION
-      - scripts/build-macos.sh
       - scripts/build-windows.sh
-      - scripts/build-linux.sh
       - .github/workflows/build.yml
   workflow_dispatch:
 
@@ -27,57 +28,10 @@ permissions:
   contents: write  # required to create releases + upload assets
 
 jobs:
-  build-macos:
-    name: build ${{ matrix.target }}
-    # Depot's macOS runners are Apple Silicon (M2) only — see
-    # https://depot.dev/docs/github-actions/runner-types. Both the native
-    # arm64 build and the cross-compiled x86_64 build run here; the script
-    # handles the cross-compilation switch internally.
-    runs-on: depot-macos-15
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - aarch64-apple-darwin
-          - x86_64-apple-darwin
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: read version metadata
-        id: meta
-        run: |
-          version="$(tr -d '[:space:]' < VERSION)"
-          build="${{ github.run_number }}"
-          echo "ffmpeg_version=${version}" >> "$GITHUB_OUTPUT"
-          echo "build_number=${build}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${version}-${build}" >> "$GITHUB_OUTPUT"
-
-      # pkg-config: how FFmpeg's configure discovers the static OpenSSL
-      # (--enable-openssl). Usually preinstalled on macOS runner images, but
-      # the build aborts confusingly without it, so ensure it explicitly.
-      - name: install pkg-config
-        run: brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
-
-      - name: install nasm (x86_64 cross-build only)
-        if: matrix.target == 'x86_64-apple-darwin'
-        run: brew install nasm
-
-      - name: build
-        run: scripts/build-macos.sh --target ${{ matrix.target }}
-
-      - name: upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ffmpeg-${{ steps.meta.outputs.ffmpeg_version }}-${{ matrix.target }}
-          path: |
-            dist/${{ matrix.target }}/ffmpeg-${{ steps.meta.outputs.ffmpeg_version }}-${{ matrix.target }}.tar.gz
-            dist/${{ matrix.target }}/ffmpeg-${{ steps.meta.outputs.ffmpeg_version }}-${{ matrix.target }}.tar.gz.sha256
-          if-no-files-found: error
-          retention-days: 7
-
   build-windows:
     name: build ${{ matrix.target }}
-    runs-on: depot-windows-2025-8
+    runs-on: windows-2025
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -98,7 +52,9 @@ jobs:
 
       # Provision MSYS2 + the mingw-w64 toolchain and encoder header packages.
       # The build-windows.sh script verifies these are present and errors if
-      # any are missing — so this list is the source of truth.
+      # any are missing — so this list is the source of truth. zlib and
+      # FreeType are deliberately NOT installed from MSYS2: the script builds
+      # them from pinned upstream tarballs.
       - name: set up MSYS2
         uses: msys2/setup-msys2@v2
         with:
@@ -121,7 +77,7 @@ jobs:
         shell: msys2 {0}
         run: scripts/build-windows.sh --target ${{ matrix.target }}
 
-      - name: upload artifact
+      - name: upload build
         uses: actions/upload-artifact@v7
         with:
           name: ffmpeg-${{ steps.meta.outputs.ffmpeg_version }}-${{ matrix.target }}
@@ -131,75 +87,21 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  build-linux:
-    name: build ${{ matrix.target }}
-    # Build INSIDE debian:bookworm so the binary links the SAME glibc (2.36) +
-    # library SONAMEs as the consuming Polycast runtime image
-    # (debian:bookworm-slim). Building on the ubuntu-24.04 runner directly
-    # produced binaries that required GLIBC_2.38 (Ubuntu 24.04 ships glibc 2.39),
-    # which won't run on bookworm — x86_64 dodged it, arm64 didn't. The container
-    # inherits the runner's arch, so each target still builds natively.
-    # https://depot.dev/docs/github-actions/runner-types
-    runs-on: ${{ matrix.runner }}
-    container: debian:bookworm
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            runner: depot-ubuntu-24.04-8
-            extra_apt: nasm libva-dev
-          - target: aarch64-unknown-linux-gnu
-            runner: depot-ubuntu-24.04-arm-8
-            extra_apt: ""
-    steps:
-      # The bare bookworm container has no git; actions/checkout needs it.
-      - name: install git for checkout
-        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
-
-      - uses: actions/checkout@v6
-
-      - name: read version metadata
-        id: meta
-        run: |
-          version="$(tr -d '[:space:]' < VERSION)"
-          build="${{ github.run_number }}"
-          echo "ffmpeg_version=${version}" >> "$GITHUB_OUTPUT"
-          echo "build_number=${build}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${version}-${build}" >> "$GITHUB_OUTPUT"
-
-      # The -dev packages build-linux.sh verifies via pkg-config; they link
-      # dynamically and the Polycast Docker image provides the runtime
-      # counterparts (same bookworm SONAMEs). nasm (x86 SIMD) + libva-dev (VAAPI)
-      # are x86_64-only — arm64 is software (gnutls + openh264). All in Debian
-      # main; no sudo (the container runs as root).
-      - name: install build dependencies
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            build-essential git curl ca-certificates pkg-config xz-utils \
-            openssl \
-            libgnutls28-dev libopenh264-dev ${{ matrix.extra_apt }}
-
-      - name: build
-        run: scripts/build-linux.sh --target ${{ matrix.target }}
-
-      - name: upload artifact
+      # The corresponding source: exactly the tarballs the script verified and built.
+      - name: upload sources
         uses: actions/upload-artifact@v7
         with:
-          name: ffmpeg-${{ steps.meta.outputs.ffmpeg_version }}-${{ matrix.target }}
+          name: sources
           path: |
-            dist/${{ matrix.target }}/ffmpeg-${{ steps.meta.outputs.ffmpeg_version }}-${{ matrix.target }}.tar.gz
-            dist/${{ matrix.target }}/ffmpeg-${{ steps.meta.outputs.ffmpeg_version }}-${{ matrix.target }}.tar.gz.sha256
+            build/ffmpeg-${{ steps.meta.outputs.ffmpeg_version }}.tar.xz
+            build/sources/*.tar.*
           if-no-files-found: error
           retention-days: 7
 
   release:
     name: publish release
-    # PRs run the build matrix to verify nothing's broken, but only pushes to
-    # main produce a published release tag.
     if: github.event_name != 'pull_request'
-    needs: [build-macos, build-windows, build-linux]
+    needs: [build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -219,10 +121,13 @@ jobs:
           path: artifacts
 
       - name: collect artifacts
-        id: collect
         run: |
           mkdir -p release
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) -exec cp {} release/ \;
+          find artifacts -path 'artifacts/sources' -prune -o -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) -print -exec cp {} release/ \;
+          mkdir -p release/source
+          find artifacts/sources -type f -exec cp {} release/source/ \;
+          ( cd release/source && sha256sum * > SOURCES.sha256 && for f in *.tar.*; do mv "$f" "source-$f"; done && sed -i 's/  /  source-/' SOURCES.sha256 && mv SOURCES.sha256 source-SHA256SUMS.txt )
+          mv release/source/* release/ && rmdir release/source
           ls -lh release/
 
       - name: generate RELEASE-NOTES.md
@@ -233,37 +138,33 @@ jobs:
           {
             echo "# ${tag}"
             echo
-            echo "FFmpeg ${version} (build ${build}), LGPL-2.1 only."
+            echo "FFmpeg ${version} (build ${build}) for Windows x64, LGPL-2.1 only — the EvoIMS fork of"
+            echo "[serversideup/ffmpeg-lgpl-builds](https://github.com/serversideup/ffmpeg-lgpl-builds), adding"
+            echo "zlib and FreeType (both permissive) for the \`drawtext\` filter and the PNG encoder."
             echo
-            echo "## Upstream source"
+            echo "## Corresponding source"
             echo
-            echo "- Tarball: <https://ffmpeg.org/releases/ffmpeg-${version}.tar.xz>"
-            echo "- Pinned SHA256: \`$(grep -E "^[[:space:]]*${version}\\)[[:space:]]+SHA256=" scripts/build-macos.sh | head -n1 | sed -E 's/.*SHA256="([^"]+)".*/\1/')\`"
+            echo "Attached to this release, verbatim (\`source-*\`, hashes in \`source-SHA256SUMS.txt\`):"
+            echo
+            echo '```'
+            cat release/source-SHA256SUMS.txt
+            echo '```'
+            echo
+            echo "Reproduce by checking out this repository at tag \`${tag}\` and running"
+            echo "\`scripts/build-windows.sh --target x86_64-pc-windows-msvc\` in an MSYS2 MINGW64 shell"
+            echo "with the packages listed in \`.github/workflows/build.yml\`."
             echo
             echo "## Build configuration"
-            echo
-            echo "### macOS (\`*-apple-darwin\`)"
-            echo
-            echo '```'
-            grep -E '^\s+--' scripts/build-macos.sh | sed 's/\\$//' | sed 's/^[[:space:]]*//' | sort -u
-            echo '```'
-            echo
-            echo "### Windows (\`x86_64-pc-windows-msvc\`)"
             echo
             echo '```'
             grep -E '^\s+--' scripts/build-windows.sh | sed 's/\\$//' | sed 's/^[[:space:]]*//' | sort -u
             echo '```'
             echo
-            echo "### Linux (\`x86_64-unknown-linux-gnu\` + \`aarch64-unknown-linux-gnu\`)"
-            echo
-            echo "- x86_64: NVENC + VAAPI + libopenh264 + native aac, gnutls TLS."
-            echo "- arm64: libopenh264 + native aac (software) + passthrough, gnutls TLS — no GPU encoders (Ampere/Graviton have none)."
-            echo
-            echo "Both are LGPL-only. The exact \`./configure\` line for each target is recorded in that tarball's \`SOURCE.txt\`."
+            echo "The exact \`./configure\` line is recorded in the tarball's \`SOURCE.txt\`."
             echo
             echo "## Artifacts"
             echo
-            for sha in release/*.sha256; do
+            for sha in release/*.tar.gz.sha256; do
               file="${sha%.sha256}"
               name="$(basename "$file")"
               hash="$(awk '{print $1}' "$sha")"
@@ -272,9 +173,8 @@ jobs:
             echo
             echo "## Verification"
             echo
-            echo "Extract a tarball and run \`./ffmpeg -version\`. The configuration line must contain \`--disable-gpl --disable-nonfree --disable-version3\` and must NOT contain \`--enable-gpl\`, \`--enable-nonfree\`, or \`--enable-version3\`."
-            echo
-            echo "Reproduce from source by checking out this repo at tag \`${tag}\` and running \`scripts/build-macos.sh --target <triple>\` on an Apple Silicon Mac with Xcode CLT installed."
+            echo "Extract and run \`ffmpeg.exe -version\`: the configuration must contain \`--disable-gpl --disable-nonfree --disable-version3\`"
+            echo "and \`--enable-zlib --enable-libfreetype\`, and must not contain \`--enable-gpl\`, \`--enable-nonfree\` or \`--enable-version3\`."
           } > release/RELEASE-NOTES.md
           cat release/RELEASE-NOTES.md
 
@@ -285,10 +185,10 @@ jobs:
           tag="${{ steps.meta.outputs.tag }}"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "release $tag already exists — updating assets"
-            gh release upload "$tag" release/*.tar.gz release/*.sha256 --clobber
+            gh release upload "$tag" release/*.tar.gz release/*.sha256 release/source-* --clobber
           else
             gh release create "$tag" \
               --title "$tag" \
               --notes-file release/RELEASE-NOTES.md \
-              release/*.tar.gz release/*.sha256
+              release/*.tar.gz release/*.sha256 release/source-*
           fi
