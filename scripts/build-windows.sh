@@ -2,13 +2,16 @@
 #
 # build-windows.sh — Compile an LGPL-only FFmpeg for Windows.
 #
-# EvoIMS fork (CamCSDC/ffmpeg-lgpl-builds): adds zlib and FreeType, built here
-# from signed, SHA256-pinned release tarballs, so the binary has the drawtext
-# filter (FreeType) and the PNG encoder (zlib) that EvoIMS's case-story videos
-# and waveform pictures need. Both are permissively licensed (zlib licence;
-# FreeType under the FTL), so the build stays LGPL-2.1-only. FreeType is built
-# without HarfBuzz, Brotli, bzip2 and libpng: MSYS2's own FreeType would drag in
-# HarfBuzz → GLib/graphite2/libintl, which are LGPL and would widen what ships.
+# EvoIMS fork (CamCSDC/ffmpeg-lgpl-builds): adds zlib, FreeType and HarfBuzz,
+# built here from SHA256-pinned release tarballs, so the binary has the drawtext
+# filter (FFmpeg 8.1 needs both FreeType and HarfBuzz for it) and the PNG encoder
+# (zlib) that EvoIMS's case-story videos and waveform pictures need. All three
+# are permissively licensed (zlib licence; FreeType under the FTL; HarfBuzz under
+# the "Old MIT" licence), so the build stays LGPL-2.1-only. Each is built with
+# its optional dependencies off — FreeType without HarfBuzz, Brotli, bzip2 and
+# libpng; HarfBuzz without GLib, ICU, cairo and graphite2 — because MSYS2's own
+# packages would drag in GLib/graphite2/libintl, which are LGPL and would widen
+# what ships.
 #
 # Run inside an MSYS2 MINGW64 shell with the toolchain + encoder header
 # packages installed (see .github/workflows/build.yml for the package list).
@@ -32,6 +35,7 @@
 #     LIBWINPTHREAD-LICENSE.txt
 #     LIBOPENH264-LICENSE.txt
 #     FREETYPE-LICENSE.txt                  (FreeType Project License)
+#     HARFBUZZ-LICENSE.txt                  ("Old MIT")
 #     ZLIB-LICENSE.txt
 #     GCC-RUNTIME-LIBRARY-EXCEPTION.txt
 #     GCC-LICENSE.txt
@@ -194,6 +198,11 @@ FREETYPE_VERSION="2.14.3"
 FREETYPE_SHA256="36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f"
 FREETYPE_URLS=("https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.xz"
                "https://downloads.sourceforge.net/project/freetype/freetype2/${FREETYPE_VERSION}/freetype-${FREETYPE_VERSION}.tar.xz")
+# HarfBuzz publishes no signatures; the pin matches the SHA256 digest GitHub
+# records for the release asset.
+HARFBUZZ_VERSION="14.4.0"
+HARFBUZZ_SHA256="2357ed966c6ced7bfa720b0640c0231065af01158fbea215093ffa15aed44371"
+HARFBUZZ_URLS=("https://github.com/harfbuzz/harfbuzz/releases/download/${HARFBUZZ_VERSION}/harfbuzz-${HARFBUZZ_VERSION}.tar.xz")
 
 SOURCES_DIR="${REPO_ROOT}/build/sources"
 DEPS_PREFIX="${BUILD_ROOT}/deps"
@@ -231,6 +240,7 @@ fetch_verified() {
 
 ZLIB_SRC="${BUILD_ROOT}/zlib-${ZLIB_VERSION}"
 FREETYPE_SRC="${BUILD_ROOT}/freetype-${FREETYPE_VERSION}"
+HARFBUZZ_SRC="${BUILD_ROOT}/harfbuzz-${HARFBUZZ_VERSION}"
 
 if [ ! -f "$DEPS_PREFIX/lib/libz.a" ]; then
     fetch_verified "zlib-${ZLIB_VERSION}.tar.gz" "$ZLIB_SHA256" "${ZLIB_URLS[@]}"
@@ -280,7 +290,32 @@ else
     echo "✓ FreeType ${FREETYPE_VERSION} already built"
 fi
 
-for pcfile in zlib freetype2; do
+if [ ! -f "$DEPS_PREFIX/lib/libharfbuzz.a" ]; then
+    for tool in meson ninja g++; do
+        command -v "$tool" >/dev/null 2>&1 || { echo "✗ $tool not found (needed for HarfBuzz)" >&2; exit 1; }
+    done
+    fetch_verified "harfbuzz-${HARFBUZZ_VERSION}.tar.xz" "$HARFBUZZ_SHA256" "${HARFBUZZ_URLS[@]}"
+    rm -rf "$HARFBUZZ_SRC"
+    tar -xf "$SOURCES_DIR/harfbuzz-${HARFBUZZ_VERSION}.tar.xz" -C "$BUILD_ROOT"
+    echo "▶ building HarfBuzz ${HARFBUZZ_VERSION} (static; FreeType only — no GLib, ICU, cairo or graphite2)"
+    # Everything optional off except FreeType, which drawtext uses through hb-ft;
+    # no subprojects fetched, so nothing arrives that is not in the pinned tarball.
+    meson setup "$HARFBUZZ_SRC/_build" "$HARFBUZZ_SRC" \
+        --prefix="$DEPS_PREFIX" --libdir=lib \
+        --buildtype=release --default-library=static --wrap-mode=nofallback \
+        -Dfreetype=enabled \
+        -Dglib=disabled -Dgobject=disabled -Dcairo=disabled -Dchafa=disabled \
+        -Dpng=disabled -Dzlib=disabled -Dicu=disabled \
+        -Dgraphite=disabled -Dgraphite2=disabled \
+        -Dtests=disabled -Dintrospection=disabled -Ddocs=disabled -Dutilities=disabled \
+        -Dsubset=disabled -Draster=disabled -Dvector=disabled -Dgpu=disabled -Dgpu_demo=disabled
+    meson compile -C "$HARFBUZZ_SRC/_build"
+    meson install -C "$HARFBUZZ_SRC/_build"
+else
+    echo "✓ HarfBuzz ${HARFBUZZ_VERSION} already built"
+fi
+
+for pcfile in zlib freetype2 harfbuzz; do
     if ! "$PKG_CONFIG" --exists "$pcfile"; then
         echo "✗ pkg-config can't find $pcfile after building it" >&2
         exit 1
@@ -389,6 +424,7 @@ if [ ! -f "$STAMP" ]; then
         --enable-schannel \
         --enable-zlib \
         --enable-libfreetype \
+        --enable-libharfbuzz \
         --enable-encoder=h264_nvenc,hevc_nvenc,h264_amf,hevc_amf,h264_qsv,hevc_qsv,libopenh264,aac \
         --enable-decoder=h264,hevc,aac,mp3,pcm_s16le,pcm_s24le,pcm_f32le \
         --enable-muxer=flv,mp4,mov \
@@ -527,6 +563,13 @@ fi
 # which asks for credit in the documentation — SOURCE.txt carries it).
 cp "$ZLIB_SRC/LICENSE" "$OUT_DIR/ZLIB-LICENSE.txt"
 cp "$FREETYPE_SRC/docs/FTL.TXT" "$OUT_DIR/FREETYPE-LICENSE.txt"
+# HarfBuzz's own licence, then the one its compiled-in Microsoft shaping data
+# carries (also MIT). Its other licence files cover test fonts, not built.
+{
+    cat "$HARFBUZZ_SRC/COPYING"
+    printf '\n\n---- src/ms-use/COPYING (Universal Shaping Engine data, compiled in) ----\n\n'
+    cat "$HARFBUZZ_SRC/src/ms-use/COPYING"
+} > "$OUT_DIR/HARFBUZZ-LICENSE.txt"
 
 # GCC runtime: ship the Runtime Library Exception (the term that makes
 # redistribution alongside our binary copyleft-free) plus the GPLv3 base text.
@@ -638,6 +681,8 @@ zlib ${ZLIB_VERSION}:     ${ZLIB_URLS[0]}
 SHA256:         ${ZLIB_SHA256}
 FreeType ${FREETYPE_VERSION}: ${FREETYPE_URLS[0]}
 SHA256:         ${FREETYPE_SHA256}
+HarfBuzz ${HARFBUZZ_VERSION}: ${HARFBUZZ_URLS[0]}
+SHA256:         ${HARFBUZZ_SHA256}
 Built on:       $(date -u +%Y-%m-%dT%H:%M:%SZ)
 Built for:      ${TARGET}
 Toolchain:      mingw-w64 gcc (via MSYS2)
@@ -647,19 +692,21 @@ Configuration:  ${CONFIG_CLEAN}
 This binary is LGPL-2.1-only. Per LGPL § 6, downstream end users are entitled
 to the complete corresponding source code for this FFmpeg build. The FFmpeg,
 zlib and FreeType source tarballs above (matching the SHA256s) are attached,
-verbatim, to the GitHub release this binary came from, beside the build
+verbatim, to the GitHub release this binary came from (with HarfBuzz's),
+beside the build
 scripts that produced it:
 
   https://github.com/CamCSDC/ffmpeg-lgpl-builds
 
-a fork of https://github.com/serversideup/ffmpeg-lgpl-builds that adds zlib and
-FreeType for EvoIMS. Check out the tag matching this binary's release to
+a fork of https://github.com/serversideup/ffmpeg-lgpl-builds that adds zlib,
+FreeType and HarfBuzz for EvoIMS. Check out the tag matching this binary's release to
 reproduce the build.
 
 zlib is statically linked under the zlib licence (ZLIB-LICENSE.txt). FreeType is
 statically linked under the FreeType Project License (FREETYPE-LICENSE.txt):
 Portions of this software are copyright © 2026 The FreeType Project
 (https://freetype.org). All rights reserved.
+HarfBuzz is statically linked under its "Old MIT" licence (HARFBUZZ-LICENSE.txt).
 
 This artifact also bundles the runtime DLLs that ffmpeg.exe imports, directly
 or transitively:
@@ -701,6 +748,7 @@ ARCHIVE_FILES=(
     SOURCE.txt
     ZLIB-LICENSE.txt
     FREETYPE-LICENSE.txt
+    HARFBUZZ-LICENSE.txt
 )
 # libopenh264 ships under a soname-versioned name (libopenh264-N.dll) that the
 # staging step copied into $OUT_DIR. ffmpeg.exe imports it directly, so it MUST

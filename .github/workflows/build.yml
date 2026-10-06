@@ -2,8 +2,8 @@ name: build
 
 # EvoIMS fork of serversideup/ffmpeg-lgpl-builds: Windows x64 only, on
 # GitHub-hosted runners (upstream uses Depot runners a fork cannot reach), with
-# zlib + FreeType added for drawtext and PNG. Each release carries the exact
-# FFmpeg, zlib and FreeType source tarballs it was built from, so the LGPL
+# zlib, FreeType and HarfBuzz added for drawtext and PNG. Each release carries the
+# exact FFmpeg, zlib, FreeType and HarfBuzz source tarballs it was built from, so the LGPL
 # source offer is satisfied from the same place as the binary.
 #
 # Cuts a release whenever VERSION or the build script changes on main. Also
@@ -52,9 +52,9 @@ jobs:
 
       # Provision MSYS2 + the mingw-w64 toolchain and encoder header packages.
       # The build-windows.sh script verifies these are present and errors if
-      # any are missing — so this list is the source of truth. zlib and
-      # FreeType are deliberately NOT installed from MSYS2: the script builds
-      # them from pinned upstream tarballs.
+      # any are missing — so this list is the source of truth. zlib, FreeType
+      # and HarfBuzz are deliberately NOT installed from MSYS2: the script builds
+      # them from pinned upstream tarballs (meson + ninja are for HarfBuzz).
       - name: set up MSYS2
         uses: msys2/setup-msys2@v2
         with:
@@ -69,6 +69,8 @@ jobs:
             mingw-w64-x86_64-amf-headers
             mingw-w64-x86_64-libvpl
             mingw-w64-x86_64-openh264
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-ninja
             git
             diffutils
             tar
@@ -140,7 +142,7 @@ jobs:
             echo
             echo "FFmpeg ${version} (build ${build}) for Windows x64, LGPL-2.1 only — the EvoIMS fork of"
             echo "[serversideup/ffmpeg-lgpl-builds](https://github.com/serversideup/ffmpeg-lgpl-builds), adding"
-            echo "zlib and FreeType (both permissive) for the \`drawtext\` filter and the PNG encoder."
+            echo "zlib, FreeType and HarfBuzz (all permissive) for the \`drawtext\` filter and the PNG encoder."
             echo
             echo "## Corresponding source"
             echo
@@ -174,7 +176,7 @@ jobs:
             echo "## Verification"
             echo
             echo "Extract and run \`ffmpeg.exe -version\`: the configuration must contain \`--disable-gpl --disable-nonfree --disable-version3\`"
-            echo "and \`--enable-zlib --enable-libfreetype\`, and must not contain \`--enable-gpl\`, \`--enable-nonfree\` or \`--enable-version3\`."
+            echo "and \`--enable-zlib --enable-libfreetype --enable-libharfbuzz\`, and must not contain \`--enable-gpl\`, \`--enable-nonfree\` or \`--enable-version3\`."
           } > release/RELEASE-NOTES.md
           cat release/RELEASE-NOTES.md
 
