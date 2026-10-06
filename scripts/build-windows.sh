@@ -587,6 +587,11 @@ for gcc_dir in /mingw64/share/licenses/gcc-libs /mingw64/share/licenses/gcc; do
         break
     fi
 done
+# MSYS2 does not install the exception text where the loop above looks, and the
+# GCC runtime DLLs ship under it — so the copy kept in this repository is used.
+if [ ! -f "$OUT_DIR/GCC-RUNTIME-LIBRARY-EXCEPTION.txt" ]; then
+    cp "$REPO_ROOT/licenses/GCC-RUNTIME-LIBRARY-EXCEPTION.txt" "$OUT_DIR/GCC-RUNTIME-LIBRARY-EXCEPTION.txt"
+fi
 
 # ---- transitive import audit ------------------------------------------------
 # Walk the full DLL import graph reachable from ffmpeg.exe / ffprobe.exe. Every
@@ -749,6 +754,7 @@ ARCHIVE_FILES=(
     ZLIB-LICENSE.txt
     FREETYPE-LICENSE.txt
     HARFBUZZ-LICENSE.txt
+    GCC-RUNTIME-LIBRARY-EXCEPTION.txt
 )
 # libopenh264 ships under a soname-versioned name (libopenh264-N.dll) that the
 # staging step copied into $OUT_DIR. ffmpeg.exe imports it directly, so it MUST
@@ -756,7 +762,7 @@ ARCHIVE_FILES=(
 for openh264_dll in "$OUT_DIR"/libopenh264-*.dll; do
     [ -f "$openh264_dll" ] && ARCHIVE_FILES+=("$(basename "$openh264_dll")")
 done
-for optional in LIBVPL-LICENSE.txt LIBWINPTHREAD-LICENSE.txt LIBOPENH264-LICENSE.txt GCC-RUNTIME-LIBRARY-EXCEPTION.txt GCC-LICENSE.txt; do
+for optional in LIBVPL-LICENSE.txt LIBWINPTHREAD-LICENSE.txt LIBOPENH264-LICENSE.txt GCC-LICENSE.txt; do
     if [ -f "$OUT_DIR/$optional" ]; then
         ARCHIVE_FILES+=("$optional")
     fi
